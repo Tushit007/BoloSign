@@ -1,78 +1,132 @@
 const express = require("express");
-const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
+const cors = require("cors");
 const crypto = require("crypto");
 const { PDFDocument } = require("pdf-lib");
 
+// --------------------------------------------------
+// App setup
+// --------------------------------------------------
 const app = express();
+const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json({ limit: "20mb" }));
 
-function sha256(buffer) {
-  return crypto.createHash("sha256").update(buffer).digest("hex");
+// --------------------------------------------------
+// Ensure signed directory exists
+// --------------------------------------------------
+const SIGNED_DIR = path.join(__dirname, "signed");
+if (!fs.existsSync(SIGNED_DIR)) {
+  fs.mkdirSync(SIGNED_DIR);
 }
 
+// Serve signed PDFs
+app.use("/signed", express.static(SIGNED_DIR));
+
+// --------------------------------------------------
+// Health check (optional but useful)
+// --------------------------------------------------
+app.get("/", (req, res) => {
+  res.send("Signature Burn-In Engine running");
+});
+
+// --------------------------------------------------
+// POST /sign-pdf
+// --------------------------------------------------
 app.post("/sign-pdf", async (req, res) => {
   try {
     const { box, signatureImg } = req.body;
+
     if (!box || !signatureImg) {
       return res.status(400).json({ error: "Missing payload" });
     }
 
-    const pdfPath = path.join(__dirname, "../client/public/sample.pdf");
-    const pdfBytes = fs.readFileSync(pdfPath);
-    const originalHash = sha256(pdfBytes);
+    // --------------------------------------------------
+    // Load base PDF (MUST exist in server folder)
+    // --------------------------------------------------
+    const pdfPath = path.join(__dirname, "sample.pdf");
+    const existingPdfBytes = fs.readFileSync(pdfPath);
 
-    const pdfDoc = await PDFDocument.load(pdfBytes);
-    const page = pdfDoc.getPage(0);
+    // Audit: hash original PDF
+    const originalHash = crypto
+      .createHash("sha256")
+      .update(existingPdfBytes)
+      .digest("hex");
+
+    // --------------------------------------------------
+    // Load PDF
+    // --------------------------------------------------
+    const pdfDoc = await PDFDocument.load(existingPdfBytes);
+    const page = pdfDoc.getPages()[0];
     const { width, height } = page.getSize();
 
+    // --------------------------------------------------
+    // Convert normalized → PDF coordinates
+    // --------------------------------------------------
     const x = box.xPct * width;
-    const y = height - box.yPct * height - box.hPct * height;
+    const y = height - (box.yPct * height) - (box.hPct * height);
     const w = box.wPct * width;
     const h = box.hPct * height;
 
+    // --------------------------------------------------
+    // Decode signature image
+    // --------------------------------------------------
     const base64Data = signatureImg.split(",")[1];
     const imageBytes = Buffer.from(base64Data, "base64");
-    const img = await pdfDoc.embedPng(imageBytes);
+    const image = await pdfDoc.embedPng(imageBytes);
 
-    const imgRatio = img.width / img.height;
-    const boxRatio = w / h;
+    // --------------------------------------------------
+    // Aspect-ratio safe scaling
+    // --------------------------------------------------
+    const imgAspect = image.width / image.height;
+    const boxAspect = w / h;
 
-    let drawW, drawH;
-    if (imgRatio > boxRatio) {
-      drawW = w;
-      drawH = w / imgRatio;
+    let drawWidth = w;
+    let drawHeight = h;
+
+    if (imgAspect > boxAspect) {
+      drawHeight = w / imgAspect;
     } else {
-      drawH = h;
-      drawW = h * imgRatio;
+      drawWidth = h * imgAspect;
     }
 
-    page.drawImage(img, {
-      x: x + (w - drawW) / 2,
-      y: y + (h - drawH) / 2,
-      width: drawW,
-      height: drawH,
+    const offsetX = x + (w - drawWidth) / 2;
+    const offsetY = y + (h - drawHeight) / 2;
+
+    page.drawImage(image, {
+      x: offsetX,
+      y: offsetY,
+      width: drawWidth,
+      height: drawHeight,
     });
 
+    // --------------------------------------------------
+    // Save signed PDF
+    // --------------------------------------------------
     const signedPdfBytes = await pdfDoc.save();
-    const signedHash = sha256(signedPdfBytes);
 
-    const outputPath = path.join(
-      __dirname,
-      "signed",
-      `signed-${Date.now()}.pdf`
-    );
+    const signedHash = crypto
+      .createHash("sha256")
+      .update(signedPdfBytes)
+      .digest("hex");
+
+    const filename = `signed-${Date.now()}.pdf`;
+    const outputPath = path.join(SIGNED_DIR, filename);
 
     fs.writeFileSync(outputPath, signedPdfBytes);
 
-    console.log("Audit Trail:", { originalHash, signedHash });
-
+    // --------------------------------------------------
+    // Response
+    // --------------------------------------------------
     res.json({
       success: true,
-      url: `/signed/${path.basename(outputPath)}`,
+      url: `/signed/${filename}`,
+      audit: {
+        originalHash,
+        signedHash,
+      },
     });
   } catch (err) {
     console.error(err);
@@ -80,8 +134,9 @@ app.post("/sign-pdf", async (req, res) => {
   }
 });
 
-app.use("/signed", express.static(path.join(__dirname, "signed")));
-
-app.listen(5000, () =>
-  console.log("Server running on http://localhost:5000")
-);
+// --------------------------------------------------
+// Start server
+// --------------------------------------------------
+app.listen(PORT, () => {
+  console.log(`Backend running on port ${PORT}`);
+});
