@@ -103,7 +103,7 @@ function App() {
 
   /* ---------------- CALL BACKEND ---------------- */
   async function signPdf() {
-    const res = await fetch("http://localhost:5000/sign-pdf", {
+    const res = await fetch("https://bolosign-oxsv.onrender.com/sign-pdf", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ box, signatureImg }),
