@@ -1,6 +1,11 @@
 import { useRef, useState, useEffect } from "react";
 import { Document, Page } from "react-pdf";
 
+/**
+ * 🔴 CHANGE THIS TO YOUR RENDER BACKEND URL
+ */
+const API_BASE = "https://bolosign-oxsv.onrender.com";
+
 function App() {
   const containerRef = useRef(null);
   const boxRef = useRef(null);
@@ -39,7 +44,8 @@ function App() {
   }
 
   function onMouseMove(e) {
-    const container = containerRef.current.getBoundingClientRect();
+    const container = containerRef.current?.getBoundingClientRect();
+    if (!container) return;
 
     if (dragging) {
       let newLeft =
@@ -65,7 +71,6 @@ function App() {
 
     if (resizing) {
       const boxRect = boxRef.current.getBoundingClientRect();
-
       let newWidthPx = Math.max(50, e.clientX - boxRect.left);
       let newHeightPx = newWidthPx / aspectRatio.current;
 
@@ -102,18 +107,31 @@ function App() {
   }
 
   /* ---------------- CALL BACKEND ---------------- */
-  async function signPdf() {
-    const res = await fetch("https://bolosign-oxsv.onrender.com/sign-pdf", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ box, signatureImg }),
-    });
-
-    const data = await res.json();
-    if (data.url) {
-      window.open(`http://localhost:5000${data.url}`, "_blank");
+  const signPdf = async () => {
+    if (!signatureImg) {
+      alert("Upload signature image first");
+      return;
     }
-  }
+
+    try {
+      const res = await fetch(`${API_BASE}/sign-pdf`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ box, signatureImg }),
+      });
+
+      if (!res.ok) throw new Error("Signing failed");
+
+      const data = await res.json();
+
+      window.open(`${API_BASE}${data.url}`, "_blank");
+    } catch (err) {
+      console.error(err);
+      alert("Failed to sign PDF");
+    }
+  };
 
   return (
     <div style={{ padding: 20 }}>
